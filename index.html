@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Library Management Web App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Base styles */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f9;
+        }
+        .container-card {
+            max-width: 1200px;
+            margin: 20px auto;
+            background: white;
+            border-radius: 1rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            padding: 2rem;
+        }
+        /* Utility styles for form elements */
+        .input-style {
+            padding: 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            width: 100%;
+            margin-top: 0.25rem;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .input-style:focus {
+            border-color: #4f46e5;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+        /* Button styles */
+        .btn-primary {
+            background-color: #4f46e5;
+            color: white;
+            padding: 0.65rem 1.25rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+        .btn-primary:hover {
+            background-color: #4338ca;
+        }
+        .btn-secondary {
+            background-color: #f3f4f6;
+            color: #4b5563;
+            padding: 0.65rem 1.25rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+        .btn-secondary:hover {
+            background-color: #e5e7eb;
+        }
+        .icon-btn {
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            transition: background-color 0.15s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .nav-button {
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .nav-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div id="app" class="p-4 sm:p-8">
+        <div class="container-card">
+            <h1 class="text-3xl font-bold text-gray-800 mb-6 border-b pb-4">
+                Library Management System
+            </h1>
+            
+            <!-- Custom Message Box for errors/confirmations -->
+            <div id="message-box" class="hidden fixed top-0 left-0 right-0 z-50 p-4 bg-red-100 text-red-800 text-center font-medium shadow-md"></div>
+            
+            <div id="content-area" class="min-h-[500px]">
+                <!-- Content will be rendered by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- DATA MANAGEMENT (Model) ---
+        let books = [];
+        let users = [];
+        let transactions = [];
+        let currentEditItem = null; // Used to track which item is being edited
+
+        function loadData() {
+            try {
+                books = JSON.parse(localStorage.getItem('libraryBooks')) || [];
+                users = JSON.parse(localStorage.getItem('libraryUsers')) || [];
+                transactions = JSON.parse(localStorage.getItem('libraryTransactions')) || [];
+            } catch (e) {
+                console.error("Error loading data from localStorage:", e);
+                showMessage("Could not load data. Local storage might be full or corrupted.", 'error');
+            }
+        }
+
+        function saveData() {
+            try {
+                localStorage.setItem('libraryBooks', JSON.stringify(books));
+                localStorage.setItem('libraryUsers', JSON.stringify(users));
+                localStorage.setItem('libraryTransactions', JSON.stringify(transactions));
+            } catch (e) {
+                console.error("Error saving data to localStorage:", e);
+                showMessage("Could not save data. Local storage might be full.", 'error');
+            }
+        }
+        
+        // --- UTILITY FUNCTIONS ---
+
+        function showMessage(message, type = 'info') {
+            const box = document.getElementById('message-box');
+            box.textContent = message;
+            box.className = 'fixed top-0 left-0 right-0 z-50 p-4 text-center font-medium shadow-md';
+            
+            if (type === 'error') {
+                box.classList.add('bg-red-100', 'text-red-800');
+            } else if (type === 'success') {
+                box.classList.add('bg-green-100', 'text-green-800');
+            } else {
+                box.classList.add('bg-blue-100', 'text-blue-800');
+            }
+            box.classList.remove('hidden');
+
+            setTimeout(() => {
+                box.classList.add('hidden');
+            }, 3000);
+        }
+
+        /**
+         * Calculates the overdue fine for a book.
+         * Fine: $0.50 per day after a 7-day period.
+         */
+        function calculateFine(issueDateStr) {
+            if (!issueDateStr) return '0.00';
+            
+            const issueDate = new Date(issueDateStr);
+            const today = new Date();
+            
+            // Due date is 7 days after issue date
+            const dueDate = new Date(issueDate);
+            dueDate.setDate(dueDate.getDate() + 7);
+
+            // If today is before the due date, no fine
+            if (today <= dueDate) {
+                return '0.00';
+            }
+
+            // Calculate days overdue
+            const timeDifference = today.getTime() - dueDate.getTime();
+            const daysOverdue = Math.ceil(timeDifference / (1000 * 60 * 60 * 24));
+            
+            // Fine rate: 0.50 per day
+            const fine = daysOverdue * 0.50;
+            return fine.toFixed(2);
+        }
+
+        // --- CRUD/CORE LOGIC FUNCTIONS ---
+        
+        function saveBook(bookData) {
+            if (bookData.id) {
+                // EDIT Existing Book
+                const index = books.findIndex(b => b.id === bookData.id);
+                if (index !== -1) {
+                    // Ensure available copies don't exceed total copies
+                    const issued = bookData.totalCopies - books[index].availableCopies;
+                    if (bookData.availableCopies > bookData.totalCopies) {
+                        bookData.availableCopies = bookData.totalCopies;
+                    }
+                    // Ensure new total copies doesn't drop below issued amount
+                    if (bookData.totalCopies < issued) {
+                        showMessage(`Cannot reduce total copies below the ${issued} copies currently checked out.`, 'error');
+                        return false;
+                    }
+                    books[index] = { ...books[index], ...bookData };
+                    showMessage('Book updated successfully!', 'success');
+                }
+            } else {
+                // ADD New Book
+                const newBook = {
+                    id: Date.now().toString(),
+                    title: bookData.title,
+                    author: bookData.author,
+                    isbn: bookData.isbn,
+                    totalCopies: parseInt(bookData.totalCopies),
+                    availableCopies: parseInt(bookData.totalCopies)
+                };
+                books.push(newBook);
+                showMessage('New book added successfully!', 'success');
+            }
+            saveData();
+            return true;
+        }
+
+        function deleteBook(id) {
+            const bookTransactions = transactions.filter(t => t.bookId === id && !t.returnDate);
+            if (bookTransactions.length > 0) {
+                showMessage(`Cannot delete book. ${bookTransactions.length} copies are currently checked out.`, 'error');
+                return false;
+            }
+            
+            const initialLength = books.length;
+            books = books.filter(b => b.id !== id);
+            if (books.length < initialLength) {
+                saveData();
+                showMessage('Book deleted successfully!', 'success');
+                return true;
+            }
+            return false;
+        }
+        
+        function saveUser(userData) {
+            if (userData.id) {
+                // EDIT Existing User
+                const index = users.findIndex(u => u.id === userData.id);
+                if (index !== -1) {
+                    users[index] = { ...users[index], ...userData };
+                    showMessage('User updated successfully!', 'success');
+                }
+            } else {
+                // ADD New User
+                const newUser = {
+                    id: Date.now().toString(),
+                    name: userData.name,
+                    joined: new Date().toLocaleDateString()
+                };
+                users.push(newUser);
+                showMessage('New user added successfully!', 'success');
+            }
+            saveData();
+        }
+        
+        function deleteUser(id) {
+            const userTransactions = transactions.filter(t => t.userId === id && !t.returnDate);
+            if (userTransactions.length > 0) {
+                showMessage(`Cannot delete user. ${userTransactions.length} books are currently checked out by this user.`, 'error');
+                return false;
+            }
+            
+            const initialLength = users.length;
+            users = users.filter(u => u.id !== id);
+            if (users.length < initialLength) {
+                saveData();
+                showMessage('User deleted successfully!', 'success');
+                return true;
+            }
+            return false;
+        }
+
+        function issueBook(bookId, userId) {
+            const book = books.find(b => b.id === bookId);
+            const user = users.find(u => u.id === userId);
+
+            if (book && book.availableCopies > 0 && user) {
+                const newTransaction = {
+                    id: Date.now().toString(),
+                    bookId: book.id,
+                    bookTitle: book.title,
+                    userId: user.id,
+                    userName: user.name,
+                    issueDate: new Date().toISOString(),
+                    returnDate: null
+                };
+                
+                book.availableCopies -= 1;
+                transactions.push(newTransaction);
+                saveData();
+                showMessage('Book successfully issued!', 'success');
+                return true;
+            }
+            showMessage('Failed to issue book. Check availability or user existence.', 'error');
+            return false;
+        }
+
+        function returnBook(transactionId) {
+            const transaction = transactions.find(t => t.id === transactionId);
+            if (transaction && !transaction.returnDate) {
+                const book = books.find(b => b.id === transaction.bookId);
+                if (book && book.availableCopies < book.totalCopies) {
+                    book.availableCopies += 1;
+                }
+                transaction.returnDate = new Date().toISOString();
+                saveData();
+                showMessage('Book successfully returned!', 'success');
+                return true;
+            }
+            showMessage('Failed to return book. Transaction not found or already returned.', 'error');
+            return false;
+        }
+
+        // --- VIEW RENDERING (Controller) ---
+
+        const contentArea = document.getElementById('content-area');
+
+        function renderMainMenu() {
+            const issuedCount = transactions.filter(t => !t.returnDate).length;
+            const overdueCount = transactions.filter(t => !t.returnDate && calculateFine(t.issueDate) > 0).length;
+
+            contentArea.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    ${createMenuButton('Manage Books', 'renderBookManagement', 'bg-indigo-600', books.length, 'Total Books')}
+                    ${createMenuButton('Manage Users', 'renderUserManagement', 'bg-green-600', users.length, 'Registered Users')}
+                    ${createMenuButton('Issued Books', 'renderTransactionManagement', 'bg-yellow-600', issuedCount, 'Currently Checked Out')}
+                    ${createMenuButton('Overdue', 'renderOverdueReport', 'bg-red-600', overdueCount, 'Books Past Due Date')}
+                </div>
+            `;
+        }
+
+        function createMenuButton(title, action, color, count, description) {
+            return `
+                <button onclick="${action}();" class="nav-button ${color} text-white p-6 rounded-xl text-left shadow-lg">
+                    <div class="text-sm font-light opacity-80">${title}</div>
+                    <div class="text-4xl font-bold mt-1">${count}</div>
+                    <div class="text-sm font-light mt-2">${description}</div>
+                </button>
+            `;
+        }
+        
+        // --- BOOK VIEWS ---
+
+        function renderBookManagement(searchQuery = '') {
+            currentEditItem = null;
+            
+            const filteredBooks = books.filter(book => 
+                book.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                book.author.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                book.isbn.toLowerCase().includes(searchQuery.toLowerCase())
+            ).sort((a, b) => a.title.localeCompare(b.title));
+
+            contentArea.innerHTML = `
+                <div class="mb-4">
+                    <button onclick="renderMainMenu()" class="btn-secondary flex items-center mb-6">
+                        <svg class="w-4 h-4 mr-1 transform rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                        Back
+                    </button>
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 space-y-3 sm:space-y-0">
+                        <h2 class="text-2xl font-bold text-gray-800">Book Inventory (${books.length})</h2>
+                        <div class="flex space-x-3 w-full sm:w-auto">
+                             <input type="text" id="bookSearch" placeholder="Search by Title, Author, ISBN..." oninput="renderBookManagement(this.value)" value="${searchQuery}" class="input-style w-full sm:w-64">
+                            <button onclick="renderBookForm()" class="btn-primary flex items-center whitespace-nowrap">
+                                <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                                Add Book
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="overflow-x-auto bg-gray-50 p-4 rounded-xl shadow-inner">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title / Author</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase hidden sm:table-cell">ISBN</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Total</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Available</th>
+                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${filteredBooks.map(book => `
+                                <tr>
+                                    <td class="px-4 py-3 whitespace-nowrap">
+                                        <div class="text-sm font-medium text-gray-900">${book.title}</div>
+                                        <div class="text-xs text-gray-500">${book.author}</div>
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 hidden sm:table-cell">${book.isbn}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-center text-gray-900">${book.totalCopies}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm font-semibold text-center" style="color: ${book.availableCopies > 0 ? 'green' : 'red'};">
+                                        ${book.availableCopies}
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-right text-sm space-x-1">
+                                        <button onclick="prepareEdit('book', '${book.id}')" class="icon-btn text-indigo-600 hover:bg-indigo-100" title="Edit Book">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                        </button>
+                                        <button onclick="handleDelete('book', '${book.id}')" class="icon-btn text-red-600 hover:bg-red-100" title="Delete Book">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                        </button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                            ${filteredBooks.length === 0 ? '<tr><td colspan="5" class="p-6 text-center text-gray-500">No books found matching your search.</td></tr>' : ''}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        function renderBookForm() {
+            const isEditing = currentEditItem && currentEditItem.type === 'book';
+            const book = isEditing ? books.find(b => b.id === currentEditItem.id) : {};
+            const issuedCopies = isEditing ? book.totalCopies - book.availableCopies : 0;
+
+            contentArea.innerHTML = `
+                <button onclick="renderBookManagement()" class="btn-secondary flex items-center mb-6">
+                    <svg class="w-4 h-4 mr-1 transform rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                    Back to Books
+                </button>
+                <h2 class="text-2xl font-semibold text-gray-800 mb-6">${isEditing ? 'Edit Book: ' + book.title : 'Add New Book'}</h2>
+                <form id="book-form" class="space-y-4 max-w-xl bg-white p-6 rounded-xl shadow">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Title</label>
+                        <input type="text" id="bookTitle" required value="${book.title || ''}" class="input-style">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Author</label>
+                        <input type="text" id="bookAuthor" required value="${book.author || ''}" class="input-style">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">ISBN</label>
+                        <input type="text" id="bookISBN" required value="${book.isbn || ''}" class="input-style">
+                    </div>
+                    
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Total Copies</label>
+                            <input type="number" id="bookTotalCopies" required min="${issuedCopies}" value="${book.totalCopies || 1}" class="input-style">
+                            ${isEditing && issuedCopies > 0 ? `<p class="text-xs text-red-500 mt-1">Min value: ${issuedCopies} (Copies currently checked out)</p>` : ''}
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Available Copies</label>
+                            <input type="number" id="bookAvailableCopies" required min="0" value="${book.availableCopies || 1}" class="input-style">
+                             ${isEditing ? `<p class="text-xs text-gray-500 mt-1">Issued: ${issuedCopies}. Available must be ≤ Total.</p>` : ''}
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn-primary mt-6 w-full">${isEditing ? 'Update Book' : 'Add Book'}</button>
+                </form>
+            `;
+
+            document.getElementById('book-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const totalCopies = parseInt(document.getElementById('bookTotalCopies').value);
+                const availableCopies = parseInt(document.getElementById('bookAvailableCopies').value);
+
+                const bookData = {
+                    id: isEditing ? book.id : null,
+                    title: document.getElementById('bookTitle').value,
+                    author: document.getElementById('bookAuthor').value,
+                    isbn: document.getElementById('bookISBN').value,
+                    totalCopies: totalCopies,
+                    availableCopies: availableCopies
+                };
+                
+                // Final validation check for available copies
+                if (availableCopies > totalCopies) {
+                    showMessage("Available copies cannot exceed total copies!", 'error');
+                    return;
+                }
+                
+                if (isEditing && availableCopies < issuedCopies) {
+                    showMessage(`Available copies cannot be less than the ${issuedCopies} copies currently checked out!`, 'error');
+                    return;
+                }
+
+                if(saveBook(bookData)) {
+                    renderBookManagement();
+                }
+            });
+        }
+        
+        // --- USER VIEWS ---
+
+        function renderUserManagement(searchQuery = '') {
+            currentEditItem = null;
+
+            const filteredUsers = users.filter(user => 
+                user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                user.id.includes(searchQuery.toLowerCase())
+            ).sort((a, b) => a.name.localeCompare(b.name));
+
+            contentArea.innerHTML = `
+                <div class="mb-4">
+                    <button onclick="renderMainMenu()" class="btn-secondary flex items-center mb-6">
+                        <svg class="w-4 h-4 mr-1 transform rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                        Back
+                    </button>
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 space-y-3 sm:space-y-0">
+                        <h2 class="text-2xl font-bold text-gray-800">User Roster (${users.length})</h2>
+                        <div class="flex space-x-3 w-full sm:w-auto">
+                            <input type="text" id="userSearch" placeholder="Search by Name or ID..." oninput="renderUserManagement(this.value)" value="${searchQuery}" class="input-style w-full sm:w-64">
+                            <button onclick="renderUserForm()" class="btn-primary flex items-center whitespace-nowrap">
+                                <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"></path></svg>
+                                Add User
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="overflow-x-auto bg-gray-50 p-4 rounded-xl shadow-inner">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">User Name</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase hidden sm:table-cell">User ID</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase hidden sm:table-cell">Joined</th>
+                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${filteredUsers.map(user => `
+                                <tr>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">${user.name}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-500 hidden sm:table-cell">${user.id}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 hidden sm:table-cell">${user.joined}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-right text-sm space-x-1">
+                                        <button onclick="prepareEdit('user', '${user.id}')" class="icon-btn text-indigo-600 hover:bg-indigo-100" title="Edit User">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                        </button>
+                                        <button onclick="handleDelete('user', '${user.id}')" class="icon-btn text-red-600 hover:bg-red-100" title="Delete User">
+                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                        </button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                            ${filteredUsers.length === 0 ? '<tr><td colspan="4" class="p-6 text-center text-gray-500">No users found matching your search.</td></tr>' : ''}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+        
+        function renderUserForm() {
+            const isEditing = currentEditItem && currentEditItem.type === 'user';
+            const user = isEditing ? users.find(u => u.id === currentEditItem.id) : {};
+            
+            contentArea.innerHTML = `
+                <button onclick="renderUserManagement()" class="btn-secondary flex items-center mb-6">
+                    <svg class="w-4 h-4 mr-1 transform rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                    Back to Users
+                </button>
+                <h2 class="text-2xl font-semibold text-gray-800 mb-6">${isEditing ? 'Edit User: ' + user.name : 'Add New User'}</h2>
+                <form id="user-form" class="space-y-4 max-w-xl bg-white p-6 rounded-xl shadow">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">User Name</label>
+                        <input type="text" id="userName" required value="${user.name || ''}" class="input-style">
+                    </div>
+                    <button type="submit" class="btn-primary mt-6 w-full">${isEditing ? 'Update User' : 'Register User'}</button>
+                </form>
+            `;
+
+            document.getElementById('user-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const name = document.getElementById('userName').value;
+                
+                saveUser({
+                    id: isEditing ? user.id : null,
+                    name: name
+                });
+                renderUserManagement();
+            });
+        }
+        
+        // --- TRANSACTION VIEWS ---
+
+        function renderTransactionManagement() {
+            const issued = transactions.filter(t => !t.returnDate);
+            const returned = transactions.filter(t => t.returnDate).slice(-5).reverse();
+            
+            contentArea.innerHTML = `
+                <button onclick="renderMainMenu()" class="btn-secondary flex items-center mb-6">
+                    <svg class="w-4 h-4 mr-1 transform rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                    Back
+                </button>
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">Book Transactions</h2>
+                
+                <!-- Issue Form -->
+                <div class="bg-indigo-50 p-6 rounded-xl mb-8 border border-indigo-200 shadow-md">
+                    <h3 class="text-xl font-bold text-indigo-800 mb-4">Issue a Book</h3>
+                    <form id="issue-form" class="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
+                        <div class="sm:col-span-1">
+                            <label class="block text-sm font-medium text-indigo-700">Select User</label>
+                            <select id="issueUserId" required class="input-style bg-white">
+                                <option value="">-- Choose User --</option>
+                                ${users.map(user => `<option value="${user.id}">${user.name}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="block text-sm font-medium text-indigo-700">Select Book (Available)</label>
+                            <select id="issueBookId" required class="input-style bg-white">
+                                <option value="">-- Choose Book --</option>
+                                ${books.filter(b => b.availableCopies > 0).map(book => 
+                                    `<option value="${book.id}">${book.title} (${book.availableCopies} available)</option>`
+                                ).join('')}
+                            </select>
+                        </div>
+                        <div class="sm:col-span-1">
+                            <button type="submit" class="btn-primary w-full">Issue</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Issued Books List -->
+                <h3 class="text-xl font-semibold text-gray-800 mb-3">Currently Issued (${issued.length})</h3>
+                <div class="overflow-x-auto bg-white p-4 rounded-xl shadow">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Book / User</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Issue Date</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fine</th>
+                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${issued.map(t => {
+                                const fine = calculateFine(t.issueDate);
+                                return `
+                                <tr>
+                                    <td class="px-4 py-3 whitespace-nowrap">
+                                        <div class="text-sm font-medium text-gray-900">${t.bookTitle}</div>
+                                        <div class="text-xs text-gray-500">To: ${t.userName}</div>
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">${new Date(t.issueDate).toLocaleDateString()}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm font-bold" style="color: ${fine > 0 ? 'red' : 'green'};">
+                                        $${fine}
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-right">
+                                        <button onclick="handleReturnClick('${t.id}', '${t.bookId}')" class="btn-primary bg-green-600 hover:bg-green-700 text-xs">
+                                            Return
+                                        </button>
+                                    </td>
+                                </tr>
+                                `;
+                            }).join('')}
+                            ${issued.length === 0 ? '<tr><td colspan="4" class="p-4 text-center text-gray-500">No books currently issued.</td></tr>' : ''}
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Recently Returned List -->
+                <h3 class="text-xl font-semibold text-gray-800 mt-8 mb-3">Recently Returned (Last ${returned.length})</h3>
+                <div class="overflow-x-auto bg-white p-4 rounded-xl shadow">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Book / User</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Return Date</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${returned.map(t => `
+                                <tr class="bg-green-50/50">
+                                    <td class="px-4 py-3 whitespace-nowrap">
+                                        <div class="text-sm font-medium text-gray-900">${t.bookTitle}</div>
+                                        <div class="text-xs text-gray-500">By: ${t.userName}</div>
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">${new Date(t.returnDate).toLocaleDateString()}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            document.getElementById('issue-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const bookId = document.getElementById('issueBookId').value;
+                const userId = document.getElementById('issueUserId').value;
+                
+                if (bookId && userId) {
+                    issueBook(bookId, userId);
+                    renderTransactionManagement();
+                } else {
+                    showMessage('Please select both a user and a book.', 'error');
+                }
+            });
+        }
+        
+        // --- OVERDUE REPORT VIEW ---
+        
+        function renderOverdueReport() {
+            const overdue = transactions.filter(t => !t.returnDate && calculateFine(t.issueDate) > 0)
+                                        .sort((a, b) => calculateFine(b.issueDate) - calculateFine(a.issueDate));
+            const totalFine = overdue.reduce((sum, t) => sum + parseFloat(calculateFine(t.issueDate)), 0).toFixed(2);
+
+            contentArea.innerHTML = `
+                <button onclick="renderMainMenu()" class="btn-secondary flex items-center mb-6">
+                    <svg class="w-4 h-4 mr-1 transform rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                    Back
+                </button>
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">Overdue Report (${overdue.length} Books)</h2>
+                
+                <div class="bg-red-50 p-4 rounded-xl mb-6 shadow-md border-l-4 border-red-500">
+                    <p class="text-lg font-semibold text-red-800">Total Potential Fines: <span class="text-2xl font-extrabold">$${totalFine}</span></p>
+                    <p class="text-sm text-red-700">Fines calculated at $0.50 per day after a 7-day issue period.</p>
+                </div>
+
+                <div class="overflow-x-auto bg-white p-4 rounded-xl shadow">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Book / User</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Issue Date</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fine Due</th>
+                                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${overdue.map(t => `
+                                <tr class="bg-red-50">
+                                    <td class="px-4 py-3 whitespace-nowrap">
+                                        <div class="text-sm font-medium text-gray-900">${t.bookTitle}</div>
+                                        <div class="text-xs text-gray-600">To: ${t.userName}</div>
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-700">${new Date(t.issueDate).toLocaleDateString()}</td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-sm font-extrabold text-red-600">
+                                        $${calculateFine(t.issueDate)}
+                                    </td>
+                                    <td class="px-4 py-3 whitespace-nowrap text-right">
+                                        <button onclick="handleReturnClick('${t.id}', '${t.bookId}')" class="btn-primary bg-green-600 hover:bg-green-700 text-xs">
+                                            Mark Returned
+                                        </button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                            ${overdue.length === 0 ? '<tr><td colspan="4" class="p-6 text-center text-gray-500">Congratulations! No books are currently overdue.</td></tr>' : ''}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // --- GLOBAL ACTION HANDLERS ---
+        
+        function prepareEdit(type, id) {
+            currentEditItem = { type, id };
+            if (type === 'book') {
+                renderBookForm();
+            } else if (type === 'user') {
+                renderUserForm();
+            }
+        }
+        
+        function handleDelete(type, id) {
+             const message = `Are you sure you want to permanently delete this ${type}? This action cannot be undone.`;
+             if (confirm(message)) { // Using confirm for simplicity in this sandbox environment
+                let success = false;
+                if (type === 'book') {
+                    success = deleteBook(id);
+                    if(success) renderBookManagement(document.getElementById('bookSearch')?.value || '');
+                } else if (type === 'user') {
+                    success = deleteUser(id);
+                    if(success) renderUserManagement(document.getElementById('userSearch')?.value || '');
+                }
+             }
+        }
+        
+        function handleReturnClick(transactionId, bookId) {
+             const message = "Confirm book return? This will update the book's available copies.";
+             if (confirm(message)) {
+                returnBook(transactionId, bookId);
+                renderTransactionManagement();
+             }
+        }
+
+        // --- INITIALIZATION ---
+        window.onload = () => {
+            loadData();
+            renderMainMenu();
+        };
+
+    </script>
+</body>
+</html>
